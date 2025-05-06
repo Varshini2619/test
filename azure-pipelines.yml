@@ -1,19 +1,57 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
 trigger:
-- master
+- main  # Define the branch that will trigger the pipeline.
 
-pool:
-  vmImage: ubuntu-latest
+variables:
+  azureSubscription: 'Your-Azure-Connection'  # Service connection name
+  appName: 'YourAppName'  # Your Azure Web App name
+  resourceGroup: 'YourResourceGroup'  # The resource group containing the app service
+  stagingSlot: 'staging'  # The name of the staging slot
+  productionSlot: 'production'  # The name of the production slot
+  healthCheckUrl: 'https://yourappname-staging.azurewebsites.net/health'  # URL for the health check (adjust as needed)
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+stages:
+- stage: DeployToStaging
+  jobs:
+  - job: Deploy
+    displayName: 'Deploy to Staging Slot'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: AzureWebApp@1
+      inputs:
+        azureSubscription: $(azureSubscription)
+        appName: $(appName)
+        package: '$(System.DefaultWorkingDirectory)/_your-repo-path/drop/*.zip'  # Path to your packaged app
+        slotName: $(stagingSlot)
+        resourceGroupName: $(resourceGroup)
+        deploymentMethod: 'auto'  # You can use 'auto' or 'zipDeploy'
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+- stage: HealthCheckAndSwap
+  dependsOn: DeployToStaging
+  jobs:
+  - job: HealthCheck
+    displayName: 'Run Health Check and Swap to Production'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - script: |
+        echo "Running health check for staging slot"
+        curl --silent --fail $(healthCheckUrl) || exit 1
+      displayName: 'Run Health Check'
+      
+  - job: SwapToProduction
+    dependsOn: HealthCheck
+    condition: succeeded('HealthCheck')
+    displayName: 'Swap Staging Slot to Production'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: AzureWebAppSlotSwap@1
+      inputs:
+        azureSubscription: $(azureSubscription)
+        appName: $(appName)
+        resourceGroupName: $(resourceGroup)
+        sourceSlot: $(stagingSlot)
+        targetSlot: $(productionSlot)
+        action: 'swap'
+
